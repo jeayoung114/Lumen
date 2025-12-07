@@ -1,0 +1,8 @@
+{
+  "name": "Lumen",
+  "description": "A hybrid AI visual assistant for the visually impaired, combining instant edge-based reflex warnings with deep cognitive analysis via Gemini.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
