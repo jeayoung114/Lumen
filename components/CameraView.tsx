@@ -32,40 +32,56 @@ const CameraView: React.FC<CameraViewProps> = ({
 
   // Initialize Camera
   useEffect(() => {
+    let currentStream: MediaStream | null = null;
+
     const startCamera = async () => {
       try {
+        // 1. Stop any existing stream to release hardware (crucial for mobile)
+        if (videoRef.current && videoRef.current.srcObject) {
+            const prevStream = videoRef.current.srcObject as MediaStream;
+            prevStream.getTracks().forEach(track => track.stop());
+            videoRef.current.srcObject = null;
+        }
+
+        // 2. Request new stream
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facingMode },
+          video: { 
+            facingMode: facingMode
+            // We avoid strict resolution constraints here to maximize mobile compatibility
+          },
           audio: false,
         });
+        
+        currentStream = stream;
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          // 3. Explicit play call (fix for some mobile browsers)
+          await videoRef.current.play().catch(e => console.error("Video play failed:", e));
           setStreamActive(true);
         }
       } catch (err) {
-        console.error("Camera access denied:", err);
+        console.error("Camera access denied or failed to switch:", err);
+        setStreamActive(false);
       }
     };
 
-    const stopCamera = () => {
-        if (videoRef.current && videoRef.current.srcObject) {
-            const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-            tracks.forEach(track => track.stop());
-            videoRef.current.srcObject = null;
-            setStreamActive(false);
-        }
-    };
-
     if (cameraEnabled) {
-        // Stop current stream before starting new one (needed for flipping)
-        stopCamera();
+        setStreamActive(false); // Briefly show loading/black state during switch
         startCamera();
     } else {
-        stopCamera();
+        setStreamActive(false);
+        if (videoRef.current && videoRef.current.srcObject) {
+            const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+            tracks.forEach(t => t.stop());
+            videoRef.current.srcObject = null;
+        }
     }
 
     return () => {
-      stopCamera();
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
     };
   }, [cameraEnabled, facingMode]);
 
@@ -147,14 +163,14 @@ const CameraView: React.FC<CameraViewProps> = ({
 
 
   return (
-    <div className="relative w-full h-full bg-stone-900 overflow-hidden rounded-3xl group">
+    <div className="relative w-full h-full bg-stone-900 overflow-hidden rounded-3xl group shadow-2xl">
       {/* Raw Video Feed */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className={`w-full h-full object-cover transition-opacity duration-500 ${streamActive && cameraEnabled ? 'opacity-90' : 'opacity-0'} ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+        className={`w-full h-full object-cover transition-opacity duration-500 ${streamActive && cameraEnabled ? 'opacity-100' : 'opacity-0'} ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
       />
       
       {/* Camera Off State */}
@@ -250,12 +266,12 @@ const CameraView: React.FC<CameraViewProps> = ({
       </div>
 
       {/* Camera/Session Control Button */}
-      <div className="absolute bottom-6 right-6 z-50 pointer-events-auto flex gap-3">
-        {/* Flip Camera Button */}
+      <div className="absolute bottom-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
+        {/* Flip Camera Button - Mobile Friendly */}
         <button
             onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
-            className="flex items-center justify-center w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white hover:bg-white/40 transition-all shadow-lg active:scale-95"
-            title="Flip Camera"
+            className="flex items-center justify-center w-12 h-12 rounded-full bg-stone-900/80 backdrop-blur-md border border-white/20 text-white hover:bg-stone-800 transition-all shadow-lg active:scale-95 active:bg-stone-700"
+            title="Switch Camera (Front/Back)"
         >
             <RefreshCcw className="w-5 h-5" />
         </button>

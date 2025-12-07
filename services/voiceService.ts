@@ -1,4 +1,5 @@
-type VoiceCommandCallback = (command: 'START_GUARDIAN' | 'STOP_GUARDIAN' | 'START_INSIGHT' | 'START_NAVIGATION') => void;
+
+type VoiceCommandCallback = (command: 'START_GUARDIAN' | 'STOP_GUARDIAN' | 'START_INSIGHT' | 'START_NAVIGATION' | 'START_SESSION' | 'STOP_SESSION') => void;
 
 class VoiceService {
   private recognition: any = null;
@@ -64,10 +65,41 @@ class VoiceService {
     }
   }
 
-  private processTranscript(text: string) {
-    console.log("Heard:", text);
+  public processTranscript(text: string) {
+    console.log("Processing Voice Command Input:", text);
     if (!this.callback) return;
     const t = text.toLowerCase();
+
+    // --- STOP SESSION COMMANDS ---
+    // Check for explicit stop phrases first
+    if (
+        t.includes('and session') ||
+        t.includes('stop session') || 
+        t.includes('end session') || 
+        t.includes('close session') ||
+        t.includes('stop listening') || 
+        t.includes('stop recording') ||
+        t.includes('turn off') || 
+        t.includes('shut down') || 
+        t.includes('go offline') || 
+        t.includes('end live') ||
+        t.includes('disconnect')
+    ) {
+        this.callback('STOP_SESSION');
+        return;
+    }
+
+    // --- START SESSION COMMANDS ---
+    if (
+        t.includes('start session') || 
+        t.includes('activate session') || 
+        t.includes('open session') || 
+        t.includes('begin session') ||
+        (t.includes('session') && (t.includes('activate') || t.includes('start') || t.includes('begin')))
+    ) {
+         this.callback('START_SESSION');
+         return;
+    }
 
     // --- GUARDIAN COMMANDS ---
     if (t.includes('guardian') || t.includes('reflex')) {

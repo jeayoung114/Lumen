@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import CameraView from './components/CameraView';
 import ControlInterface from './components/ControlInterface';
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | undefined>(undefined);
   const [activeMedia, setActiveMedia] = useState<MediaItem | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const isSwitchingRef = useRef(false);
   
   // Live State
   const [liveState, setLiveState] = useState<LiveState>({
@@ -127,6 +129,8 @@ const App: React.FC = () => {
         return;
     }
 
+    isSwitchingRef.current = true;
+
     // 1. Update Mode State
     setMode(newMode);
 
@@ -138,22 +142,27 @@ const App: React.FC = () => {
     }
 
     // 3. Auto-Reconnect Logic
-    // If we are currently live, we must restart to pick up the new system instructions.
-    // Even if not live, the user expectation for "Switch to X" usually implies "Start X".
-    
     if (liveState.isConnected || liveState.isConnecting) {
         await stopLiveSession();
+        // Short delay to ensure hardware is released
+        setTimeout(() => {
+            startLiveSession(newMode).finally(() => {
+                 isSwitchingRef.current = false;
+            });
+        }, 500);
+    } else {
+         isSwitchingRef.current = false;
+         // Automatically start the session in the new mode even if it wasn't running
+         startLiveSession(newMode);
     }
-    
-    // Automatically start the session in the new mode
-    startLiveSession(newMode);
   };
 
   // --- Voice Service Effects ---
 
   // 1. Manage Service Lifecycle (Start/Stop) based on Live Connection
   useEffect(() => {
-      if (!liveState.isConnected && !liveState.isConnecting) {
+      // Only run VoiceService if NOT live AND NOT currently switching modes
+      if (!liveState.isConnected && !liveState.isConnecting && !isSwitchingRef.current) {
           voiceService.start();
       } else {
           voiceService.stop();
@@ -161,13 +170,29 @@ const App: React.FC = () => {
       return () => {
           voiceService.stop();
       };
-  }, [liveState.isConnected, liveState.isConnecting]);
+  }, [liveState.isConnected, liveState.isConnecting]); // isSwitchingRef is a ref, so it doesn't trigger re-renders, logic handled in effects
 
   // 2. Update Callback (Keep Closures Fresh)
   useEffect(() => {
       voiceService.setCallback((command) => {
           console.log("Processing Voice Command:", command);
           switch(command) {
+              case 'START_SESSION':
+                  if (!liveState.isConnected && !liveState.isConnecting) {
+                      startLiveSession();
+                      audioService.speak("Starting session.");
+                  } else {
+                      audioService.speak("Session is already active.");
+                  }
+                  break;
+              case 'STOP_SESSION':
+                  if (liveState.isConnected || liveState.isConnecting) {
+                      stopLiveSession();
+                      audioService.speak("Ending session.");
+                  } else {
+                       audioService.speak("Session is already closed.");
+                  }
+                  break;
               case 'START_GUARDIAN':
                   if (!guardianActive) {
                     setGuardianActive(true);
@@ -209,6 +234,14 @@ const App: React.FC = () => {
     if (!apiKeySet) return;
 
     liveClient.setTranscriptionCallback((text, role, isFinal, sources) => {
+        // Voice Command Injection:
+        // Feed user's spoken text from the Live API into the voice service 
+        // to check for commands like "Navigation Start" even while the mic is occupied.
+        if (role === 'user') {
+            console.log("User live transcript:", text); // Debug log
+            voiceService.processTranscript(text);
+        }
+
         setChatHistory(prev => {
            const lastMsg = prev[prev.length - 1];
            
