@@ -6,7 +6,7 @@ import { analyzeScene } from './services/geminiService';
 import { audioService } from './services/audioService';
 import { liveClient } from './services/liveClient';
 import { voiceService } from './services/voiceService';
-import { BrainCircuit, XCircle, Power, Lock, Shield } from 'lucide-react';
+import { BrainCircuit, XCircle, Power, Lock, Shield, Mic, MicOff } from 'lucide-react';
 
 const App: React.FC = () => {
   const [apiKeySet, setApiKeySet] = useState(false);
@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const [liveState, setLiveState] = useState<LiveState>({
     isConnected: false,
     isConnecting: false,
+    isMuted: false,
     volume: 0
   });
 
@@ -67,55 +68,85 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // --- Handlers defined before Effects to avoid stale closures and TDZ ---
+  // --- Session Management Functions ---
 
-  const handleToggleLive = async () => {
-    // Check if connected OR connecting - allow cancellation in both states
-    if (liveState.isConnected || liveState.isConnecting) {
-        setLiveState(s => ({ ...s, isConnecting: false })); // Stop spinner immediately if connecting
+  const startLiveSession = async (overrideMode?: AppMode) => {
+      const targetMode = overrideMode || mode;
+      
+      setLiveState(s => ({ ...s, isConnecting: true, isMuted: false }));
+      
+      // Stop voice service while live to prevent self-triggering
+      voiceService.stop();
+
+      try {
+          // Use current 'useSearch', 'userLocation', 'destination' from state
+          await liveClient.connect(useSearch, userLocation, targetMode, destination);
+          
+          setLiveState(current => {
+               // Check if user cancelled while connecting
+               if (!current.isConnecting) { 
+                   liveClient.disconnect();
+                   return current;
+               }
+               // Enforce unmuted state after connection to match UI default
+               liveClient.toggleMute(false);
+               return { ...current, isConnected: true, isConnecting: false };
+          });
+      } catch (e) {
+          console.error(e);
+          setLiveState(s => ({ ...s, isConnecting: false, isConnected: false }));
+          audioService.speak("Connection failed.");
+      }
+  };
+
+  const stopLiveSession = async () => {
+        setLiveState(s => ({ ...s, isConnecting: false }));
         await liveClient.disconnect();
-        setLiveState(s => ({ ...s, isConnected: false, isConnecting: false }));
+        setLiveState(s => ({ ...s, isConnected: false, isConnecting: false, isMuted: false }));
+  };
+
+  const handleToggleLive = () => {
+    if (liveState.isConnected || liveState.isConnecting) {
+        stopLiveSession();
         audioService.speak("Session ended.");
-        // Restart voice command listening handled by effect below
     } else {
-        voiceService.stop(); // Stop voice commands while live
-        setLiveState(s => ({ ...s, isConnecting: true }));
-        try {
-            await liveClient.connect(useSearch, userLocation, mode, destination);
-            // Check if user cancelled while connecting
-            setLiveState(current => {
-                 if (!current.isConnecting) { 
-                     liveClient.disconnect();
-                     return current;
-                 }
-                 return { ...current, isConnected: true, isConnecting: false };
-            });
-        } catch (e) {
-            console.error(e);
-            setLiveState(s => ({ ...s, isConnecting: false, isConnected: false }));
-            audioService.speak("Connection failed.");
-        }
+        startLiveSession();
     }
   };
 
-  const handleModeChange = (newMode: AppMode) => {
-    if (newMode === mode) {
-        // Feedback even if already in mode, so user knows command worked
+  const handleToggleMute = () => {
+      const newMutedState = !liveState.isMuted;
+      liveClient.toggleMute(newMutedState);
+      setLiveState(s => ({ ...s, isMuted: newMutedState }));
+  };
+
+  const handleModeChange = async (newMode: AppMode) => {
+    // If already in mode and connected, just give feedback
+    if (newMode === mode && (liveState.isConnected || liveState.isConnecting)) {
         audioService.speak(`${newMode === AppMode.INSIGHT ? 'Insight' : 'Navigation'} mode is already active.`);
         return;
     }
 
+    // 1. Update Mode State
     setMode(newMode);
-    // Disconnect live session if switching modes to reset context
-    if (liveState.isConnected || liveState.isConnecting) {
-        handleToggleLive();
-    }
 
+    // 2. Audio Feedback
     if (newMode === AppMode.INSIGHT) {
       audioService.speak("Insight mode active.");
     } else if (newMode === AppMode.NAVIGATION) {
       audioService.speak("Navigation mode active.");
     }
+
+    // 3. Auto-Reconnect Logic
+    // If we are currently live, we must restart to pick up the new system instructions.
+    // Even if not live, the user expectation for "Switch to X" usually implies "Start X".
+    
+    if (liveState.isConnected || liveState.isConnecting) {
+        await stopLiveSession();
+    }
+    
+    // Automatically start the session in the new mode
+    startLiveSession(newMode);
   };
 
   // --- Voice Service Effects ---
@@ -167,10 +198,10 @@ const App: React.FC = () => {
   const handleStartApp = async () => {
       if (window.aistudio) {
           await window.aistudio.openSelectKey();
-          setApiKeySet(true); 
-      } else {
-          setApiKeySet(true);
       }
+      setApiKeySet(true); 
+      // Auto-start Insight Mode Live Session on initialization
+      startLiveSession(AppMode.INSIGHT);
   };
 
   // Setup Live Client callbacks
@@ -327,14 +358,23 @@ const App: React.FC = () => {
         <div className="flex items-center gap-3">
            {/* Global Stop Button for Live Mode */}
            {(liveState.isConnected || liveState.isConnecting) && (
-             <button 
-               onClick={handleToggleLive}
-               className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 rounded-full animate-pulse hover:bg-red-100 transition-all shadow-sm"
-             >
-               <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-               <span className="text-xs font-bold tracking-widest">{liveState.isConnecting ? 'CONNECTING' : 'LIVE'}</span>
-               <XCircle className="w-4 h-4 ml-1" />
-             </button>
+             <div className="flex items-center gap-2">
+                 <button 
+                    onClick={handleToggleMute}
+                    className={`flex items-center justify-center w-8 h-8 rounded-full border transition-all ${liveState.isMuted ? 'bg-red-500 text-white border-red-600' : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'}`}
+                 >
+                     {liveState.isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                 </button>
+
+                 <button 
+                   onClick={handleToggleLive}
+                   className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 rounded-full animate-pulse hover:bg-red-100 transition-all shadow-sm"
+                 >
+                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                   <span className="text-xs font-bold tracking-widest">{liveState.isConnecting ? 'CONNECTING' : 'LIVE'}</span>
+                   <XCircle className="w-4 h-4 ml-1" />
+                 </button>
+             </div>
            )}
 
            {/* Mode Indicator (Visual only, controls are below) */}
@@ -387,6 +427,7 @@ const App: React.FC = () => {
           setDestination={setDestination}
           activeMedia={activeMedia}
           setActiveMedia={setActiveMedia}
+          onToggleMute={handleToggleMute}
         />
       </div>
     </div>

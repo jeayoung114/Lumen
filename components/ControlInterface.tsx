@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AppMode, ChatMessage, LiveState, WebSource, MediaItem } from '../types';
-import { Mic, Send, Globe, MapPin, Video, ShoppingCart, Power, Activity, Play, X, Shield, Eye, Navigation } from 'lucide-react';
+import { Mic, Send, Globe, MapPin, Video, ShoppingCart, Power, Activity, Play, X, Shield, Eye, Navigation, MicOff } from 'lucide-react';
 
 interface ControlInterfaceProps {
   mode: AppMode;
@@ -18,6 +18,7 @@ interface ControlInterfaceProps {
   setDestination: (dest: string) => void;
   activeMedia: MediaItem | null;
   setActiveMedia: (media: MediaItem | null) => void;
+  onToggleMute?: () => void;
 }
 
 const ControlInterface: React.FC<ControlInterfaceProps> = ({ 
@@ -35,7 +36,8 @@ const ControlInterface: React.FC<ControlInterfaceProps> = ({
   destination,
   setDestination,
   activeMedia,
-  setActiveMedia
+  setActiveMedia,
+  onToggleMute
 }) => {
   const [inputText, setInputText] = useState('');
 
@@ -271,29 +273,49 @@ const ControlInterface: React.FC<ControlInterfaceProps> = ({
                  </div>
                ) : (
                  <div className="flex gap-3 items-center w-full">
+                    {/* Visualizer / Status Bar */}
                     <div className={`flex-1 flex items-center justify-between h-16 bg-gradient-to-r ${mode === AppMode.NAVIGATION ? 'from-emerald-50 to-teal-50 border-emerald-100' : 'from-rose-50 to-amber-50 border-rose-100'} rounded-2xl border px-6 relative overflow-hidden group`}>
                         
                         <div className="flex items-center gap-3 relative z-10">
+                            {/* Audio Waves - Only animate if not muted */}
                             <div className="flex gap-1 h-8 items-end">
                                 {[...Array(5)].map((_, i) => (
-                                    <div key={i} className={`w-1.5 ${mode === AppMode.NAVIGATION ? 'bg-emerald-400' : 'bg-rose-400'} rounded-full animate-[bounce_1s_infinite]`} style={{ height: '60%', animationDelay: `${i * 0.15}s` }}></div>
+                                    <div key={i} className={`w-1.5 ${mode === AppMode.NAVIGATION ? 'bg-emerald-400' : 'bg-rose-400'} rounded-full ${!liveState.isMuted ? 'animate-[bounce_1s_infinite]' : 'h-1'}`} style={{ height: !liveState.isMuted ? '60%' : '10%', animationDelay: `${i * 0.15}s` }}></div>
                                 ))}
                             </div>
                             <span className={`text-xs ${mode === AppMode.NAVIGATION ? 'text-emerald-700' : 'text-rose-700'} font-bold tracking-widest ml-2`}>
-                                {mode === AppMode.NAVIGATION ? 'NAVIGATING...' : 'LISTENING...'}
+                                {liveState.isMuted ? 'MIC MUTED' : (mode === AppMode.NAVIGATION ? 'NAVIGATING...' : 'LISTENING...')}
                             </span>
                         </div>
                     </div>
-
-                    <button 
-                        type="button" 
-                        onClick={onToggleLive}
-                        className="h-16 w-16 flex-shrink-0 rounded-2xl bg-red-500 hover:bg-red-600 text-white flex flex-col items-center justify-center transition-all shadow-lg shadow-red-200 active:scale-95 group"
-                        title="End Live Session"
-                    >
-                        <Power className="w-6 h-6 mb-0.5" />
-                        <span className="text-[10px] font-bold tracking-wider">OFF</span>
-                    </button>
+                    
+                    {/* Controls Group */}
+                    <div className="flex flex-col gap-2">
+                        {/* Mute Toggle */}
+                        {onToggleMute && (
+                            <button
+                                onClick={onToggleMute}
+                                className={`h-8 w-16 rounded-xl flex items-center justify-center transition-all shadow-sm border ${
+                                    liveState.isMuted 
+                                        ? 'bg-red-500 text-white border-red-600 shadow-red-200' 
+                                        : 'bg-white text-stone-800 border-stone-200 hover:bg-stone-50'
+                                }`}
+                                title={liveState.isMuted ? "Unmute Microphone" : "Mute Microphone"}
+                            >
+                                {liveState.isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                            </button>
+                        )}
+                        
+                        {/* End Session */}
+                        <button 
+                            type="button" 
+                            onClick={onToggleLive}
+                            className="h-8 w-16 rounded-xl bg-red-500 hover:bg-red-600 text-white flex items-center justify-center transition-all shadow-lg shadow-red-200 active:scale-95 group"
+                            title="End Live Session"
+                        >
+                            <span className="text-[10px] font-bold tracking-wider">END</span>
+                        </button>
+                    </div>
                  </div>
                )}
             </div>

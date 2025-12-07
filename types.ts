@@ -28,6 +28,7 @@ export interface ChatMessage {
 export interface LiveState {
   isConnected: boolean;
   isConnecting: boolean;
+  isMuted: boolean;
   volume: number; // For visualization
 }
 

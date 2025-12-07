@@ -38,6 +38,7 @@ class LiveClient {
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
+  private mediaStream: MediaStream | null = null;
   private workletNode: AudioWorkletNode | null = null;
   
   private nextStartTime = 0;
@@ -58,6 +59,14 @@ class LiveClient {
 
   public setVolumeCallback(callback: (vol: number) => void) {
     this.onVolumeUpdate = callback;
+  }
+
+  public toggleMute(shouldMute: boolean) {
+    if (this.mediaStream) {
+        this.mediaStream.getAudioTracks().forEach(track => {
+            track.enabled = !shouldMute;
+        });
+    }
   }
 
   public async connect(
@@ -155,10 +164,10 @@ class LiveClient {
 
   private async startAudioStream(sessionPromise: Promise<any>) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!this.inputAudioContext) return;
 
-      this.inputSource = this.inputAudioContext.createMediaStreamSource(stream);
+      this.inputSource = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
       // Setup AudioWorklet
       const blob = new Blob([workletCode], { type: 'application/javascript' });
@@ -267,6 +276,12 @@ class LiveClient {
     }
     if (this.workletNode) {
         this.workletNode.disconnect();
+    }
+    
+    // Stop all tracks in the media stream to release microphone
+    if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+        this.mediaStream = null;
     }
 
     this.inputAudioContext = null;
