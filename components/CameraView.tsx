@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { AppMode, Hazard } from '../types';
 import { audioService } from '../services/audioService';
-import { Power, Video, VideoOff } from 'lucide-react';
+import { Power, Video, VideoOff, RefreshCcw } from 'lucide-react';
 
 interface CameraViewProps {
   mode: AppMode;
@@ -28,13 +28,14 @@ const CameraView: React.FC<CameraViewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [streamActive, setStreamActive] = useState(false);
   const [hazards, setHazards] = useState<Hazard[]>([]);
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
 
   // Initialize Camera
   useEffect(() => {
     const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: { facingMode: facingMode },
           audio: false,
         });
         if (videoRef.current) {
@@ -56,6 +57,8 @@ const CameraView: React.FC<CameraViewProps> = ({
     };
 
     if (cameraEnabled) {
+        // Stop current stream before starting new one (needed for flipping)
+        stopCamera();
         startCamera();
     } else {
         stopCamera();
@@ -64,7 +67,7 @@ const CameraView: React.FC<CameraViewProps> = ({
     return () => {
       stopCamera();
     };
-  }, [cameraEnabled]);
+  }, [cameraEnabled, facingMode]);
 
   // Guardian Mode Simulation Loop (Runs independent of Primary Mode)
   useEffect(() => {
@@ -105,12 +108,17 @@ const CameraView: React.FC<CameraViewProps> = ({
          if (ctx) {
             canvasRef.current.width = videoRef.current.videoWidth;
             canvasRef.current.height = videoRef.current.videoHeight;
+            // Mirror image if in user mode for natural feel, though analysis handles it
+            if (facingMode === 'user') {
+                ctx.translate(canvasRef.current.width, 0);
+                ctx.scale(-1, 1);
+            }
             ctx.drawImage(videoRef.current, 0, 0);
             const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.8);
             onFrameCapture(dataUrl);
          }
     }
-  }, [isProcessing, cameraEnabled]);
+  }, [isProcessing, cameraEnabled, facingMode]);
 
   // Continuous capture for Live Mode
   useEffect(() => {
@@ -122,6 +130,11 @@ const CameraView: React.FC<CameraViewProps> = ({
                 if (ctx) {
                     canvasRef.current.width = videoRef.current.videoWidth;
                     canvasRef.current.height = videoRef.current.videoHeight;
+                    // Mirror image if in user mode
+                    if (facingMode === 'user') {
+                        ctx.translate(canvasRef.current.width, 0);
+                        ctx.scale(-1, 1);
+                    }
                     ctx.drawImage(videoRef.current, 0, 0);
                     const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.5); 
                     onFrameCapture(dataUrl);
@@ -130,18 +143,18 @@ const CameraView: React.FC<CameraViewProps> = ({
         }, 1000); 
     }
     return () => clearInterval(intervalId);
-  }, [liveModeActive, cameraEnabled]);
+  }, [liveModeActive, cameraEnabled, facingMode]);
 
 
   return (
-    <div className="relative w-full h-full bg-stone-900 overflow-hidden rounded-3xl shadow-2xl border-[6px] border-white ring-1 ring-stone-200 group">
+    <div className="relative w-full h-full bg-stone-900 overflow-hidden rounded-3xl group">
       {/* Raw Video Feed */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className={`w-full h-full object-cover transition-opacity duration-500 ${streamActive && cameraEnabled ? 'opacity-90' : 'opacity-0'}`}
+        className={`w-full h-full object-cover transition-opacity duration-500 ${streamActive && cameraEnabled ? 'opacity-90' : 'opacity-0'} ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
       />
       
       {/* Camera Off State */}
@@ -237,7 +250,16 @@ const CameraView: React.FC<CameraViewProps> = ({
       </div>
 
       {/* Camera/Session Control Button */}
-      <div className="absolute bottom-6 right-6 z-50 pointer-events-auto">
+      <div className="absolute bottom-6 right-6 z-50 pointer-events-auto flex gap-3">
+        {/* Flip Camera Button */}
+        <button
+            onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+            className="flex items-center justify-center w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white hover:bg-white/40 transition-all shadow-lg active:scale-95"
+            title="Flip Camera"
+        >
+            <RefreshCcw className="w-5 h-5" />
+        </button>
+
         {liveModeActive ? (
             <button
                 onClick={onToggleLive}

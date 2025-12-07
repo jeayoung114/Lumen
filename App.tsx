@@ -393,8 +393,8 @@ const App: React.FC = () => {
 
       {/* Main Viewport (Camera) */}
       <main className="flex-1 relative overflow-hidden bg-stone-100 flex items-center justify-center p-2 lg:p-4">
-        {/* Removed aspect-square to allow filling available space */}
-        <div className="h-full w-full relative shadow-lg rounded-3xl overflow-hidden">
+        {/* Square Aspect Ratio Container */}
+        <div className="aspect-square max-h-full max-w-full relative shadow-lg rounded-3xl overflow-hidden">
            <CameraView 
              mode={mode} 
              guardianActive={guardianActive}
