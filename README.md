@@ -28,6 +28,15 @@ Lumen operates on two distinct levels:
 -   **Cyberpunk UI**: High-contrast, low-light friendly interface designed for accessibility and clarity.
 -   **Privacy Focused**: Camera toggle and instant "End Session" controls.
 
+### 🌐 Real-Time Web Search
+
+Lumen's Insight Mode includes a **Web Search** capability, allowing it to provide up-to-date information (prices, ratings, news) which standard LLMs lack.
+
+**Implementation Details:**
+1.  **Tool Injection**: We dynamically inject the `googleSearch` tool into the Gemini Live session configuration when the user toggles the feature.
+2.  **System Prompting**: To prevent the model from hallucinating or refusing to search, we update the `systemInstruction` on the fly, explicitly granting it permission and instruction to use the Search tool for real-world queries.
+3.  **Grounding Metadata**: The app parses `groundingMetadata` from the API response to extract source URLs and titles, displaying them as clickable citations in the chat interface.
+
 ## 🛠️ Tech Stack
 
 -   **Frontend**: React 19, TypeScript, Vite

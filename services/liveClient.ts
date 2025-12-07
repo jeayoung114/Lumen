@@ -1,37 +1,133 @@
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { WebSource, AppMode } from "../types";
+
+// AudioWorklet processor code as a string to avoid external file dependencies in this setup
+const workletCode = `
+class PCMProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.bufferSize = 2048; // Lower latency
+    this.buffer = new Float32Array(this.bufferSize);
+    this.bufferIndex = 0;
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    if (!input || input.length === 0) return true;
+
+    const channelData = input[0];
+    
+    // Copy input data to internal buffer
+    for (let i = 0; i < channelData.length; i++) {
+      this.buffer[this.bufferIndex++] = channelData[i];
+
+      // When buffer is full, flush to main thread
+      if (this.bufferIndex >= this.bufferSize) {
+        this.port.postMessage(this.buffer.slice()); // Send copy
+        this.bufferIndex = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-processor', PCMProcessor);
+`;
 
 class LiveClient {
-  private ai: GoogleGenAI;
   private session: any = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
-  private processor: ScriptProcessorNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
+  
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
-  private onTranscription: ((text: string, role: 'user' | 'assistant', isFinal: boolean) => void) | null = null;
+  private onTranscription: ((text: string, role: 'user' | 'assistant', isFinal: boolean, webSources?: WebSource[]) => void) | null = null;
+  private onVolumeUpdate: ((vol: number) => void) | null = null;
+
+  // VAD Parameters
+  private readonly VAD_THRESHOLD = 0.012; // RMS threshold for noise gate
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // Initialization moved to connect() to ensure fresh API Key
   }
 
-  public setTranscriptionCallback(callback: (text: string, role: 'user' | 'assistant', isFinal: boolean) => void) {
+  public setTranscriptionCallback(callback: (text: string, role: 'user' | 'assistant', isFinal: boolean, webSources?: WebSource[]) => void) {
     this.onTranscription = callback;
   }
 
-  public async connect() {
-    this.cleanup(); // Ensure any previous session is fully gone
+  public setVolumeCallback(callback: (vol: number) => void) {
+    this.onVolumeUpdate = callback;
+  }
+
+  public async connect(
+    enableSearch: boolean, 
+    location?: { lat: number; lng: number },
+    mode: AppMode = AppMode.INSIGHT,
+    destination?: string
+  ) {
+    this.cleanup();
     
+    // Initialize AI client with the latest API key
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    const sessionPromise = this.ai.live.connect({
+    // Configure Tools: Search and Maps
+    // Navigation mode always needs Maps
+    const tools = (enableSearch || mode === AppMode.NAVIGATION) 
+        ? [{ googleSearch: {} }, { googleMaps: {} }] 
+        : undefined;
+    
+    // Configure Retrieval (Location)
+    const toolConfig = ((enableSearch || mode === AppMode.NAVIGATION) && location) ? {
+      retrievalConfig: {
+        latLng: {
+          latitude: location.lat,
+          longitude: location.lng
+        }
+      }
+    } : undefined;
+    
+    let systemInstruction = "";
+
+    if (mode === AppMode.NAVIGATION) {
+         systemInstruction = `You are Lumen, a navigation assistant for a visually impaired user.
+        CURRENT MODE: SYSTEM 3 - NAVIGATION.
+        USER_LATITUDE: ${location ? location.lat : 'Unknown'}
+        USER_LONGITUDE: ${location ? location.lng : 'Unknown'}
+        DESTINATION: ${destination ? destination : 'NOT SET - ASK USER'}.
+
+        YOUR MISSION:
+        1. If destination is not set, ask the user where they want to go.
+        2. SEARCH ACTION: Use Google Maps to find the route. YOU MUST SPECIFY THE STARTING POINT using the USER_LATITUDE and USER_LONGITUDE provided above. Do not assume a starting location.
+        3. Provide turn-by-turn directions based on the Maps route.
+        4. CRITICAL - MICRO-NAVIGATION: Use the video feed to provide "Micro-Navigation".
+           - Identify physical landmarks mentioned in directions (e.g., "Turn left at the Starbucks").
+           - Warn about immediate physical obstacles in the path (e.g., "There is a construction barrier ahead, shift left").
+           - Verify the user is facing the right way (e.g., "You are facing a brick wall, turn 180 degrees").
+        5. Keep instructions clear, short, and actionable. Focus on safety and orientation.
+        `;
+    } else if (enableSearch) {
+        systemInstruction = "You are Lumen. You have access to Google Search and Google Maps. You MUST use them to find real-time information. SPECIFIC CAPABILITIES: 1) Price Comparison: Find prices for products seen. 2) Nutrition: Find nutrition info for food. 3) Location: Find nearby places, ratings, and navigation details using Maps. 4) Media: Find YouTube videos or audio for songs/topics requested. When using search, provide the information clearly. If no search is needed, describe the surroundings for a visually impaired user.";
+    } else {
+        systemInstruction = "You are Lumen, an advanced visual assistant for visually impaired users. You receive a video stream of the user's surroundings. Be concise, helpful, and safety-conscious. Do not describe everything, only what is relevant to navigation or what the user asks about.";
+    }
+
+    const sessionPromise = ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-09-2025',
       config: {
         responseModalities: [Modality.AUDIO],
-        inputAudioTranscription: { model: "gemini-2.5-flash-native-audio-preview-09-2025" },
-        outputAudioTranscription: { model: "gemini-2.5-flash-native-audio-preview-09-2025" },
-        systemInstruction: "You are Lumen, an advanced visual assistant for visually impaired users. You receive a video stream of the user's surroundings. Be concise, helpful, and safety-conscious. Do not describe everything, only what is relevant to navigation or what the user asks about. If the user interrupts, stop speaking immediately.",
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        systemInstruction: systemInstruction,
+        tools: tools,
+        // @ts-ignore - The SDK types might be strict, but this structure is standard for Live API tools
+        toolConfig: toolConfig 
       },
       callbacks: {
         onopen: async () => {
@@ -51,6 +147,10 @@ class LiveClient {
     });
 
     this.session = await sessionPromise;
+    
+    // Resume contexts immediately to prevent autoplay policy blocks
+    if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
+    if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
   }
 
   private async startAudioStream(sessionPromise: Promise<any>) {
@@ -59,18 +159,43 @@ class LiveClient {
       if (!this.inputAudioContext) return;
 
       this.inputSource = this.inputAudioContext.createMediaStreamSource(stream);
-      this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
 
-      this.processor.onaudioprocess = (e) => {
-        // If we disconnected mid-stream, stop processing
-        if (!this.session) return; 
+      // Setup AudioWorklet
+      const blob = new Blob([workletCode], { type: 'application/javascript' });
+      const workletUrl = URL.createObjectURL(blob);
+      
+      await this.inputAudioContext.audioWorklet.addModule(workletUrl);
+      this.workletNode = new AudioWorkletNode(this.inputAudioContext, 'pcm-processor');
 
-        const inputData = e.inputBuffer.getChannelData(0);
+      this.workletNode.port.onmessage = (event) => {
+        if (!this.session) return;
+
+        const inputData = event.data as Float32Array;
+        
+        // --- TURN DETECTION MODULE (CLIENT-SIDE VAD) ---
+        // 1. Calculate RMS
+        let sumSquares = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sumSquares += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sumSquares / inputData.length);
+
+        // 2. Update Volume State
+        if (this.onVolumeUpdate) {
+            this.onVolumeUpdate(Math.min(1, rms * 8)); // Scale up for visualizer
+        }
+
+        // 3. Noise Gate / VAD
+        // If below threshold, send silence to help server detect end-of-turn
+        if (rms < this.VAD_THRESHOLD) {
+             inputData.fill(0);
+        }
+
         const pcmData = this.floatTo16BitPCM(inputData);
         const base64Data = this.arrayBufferToBase64(pcmData);
 
         sessionPromise.then(session => {
-            if (this.session) { // Double check active session
+            if (this.session) {
               session.sendRealtimeInput({
                   media: {
                       mimeType: 'audio/pcm;rate=16000',
@@ -78,14 +203,17 @@ class LiveClient {
                   }
               });
             }
-        }).catch(e => console.error("Send input failed", e));
+        }).catch(e => {
+            // Silence unhandled rejections for void returns
+        });
       };
 
-      this.inputSource.connect(this.processor);
-      this.processor.connect(this.inputAudioContext.destination);
+      this.inputSource.connect(this.workletNode);
+      this.workletNode.connect(this.inputAudioContext.destination); // Connect to destination to keep graph alive
+      
     } catch (err) {
       console.error("Error accessing microphone:", err);
-      this.cleanup(); // Clean up if mic fails
+      this.cleanup();
     }
   }
 
@@ -94,14 +222,16 @@ class LiveClient {
     
     const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
     
-    this.session.sendRealtimeInput({
-      media: {
-        mimeType: 'image/jpeg',
-        data: cleanBase64
-      }
-    }).catch((e: any) => {
-      console.error("Video frame send failed", e);
-    });
+    try {
+        this.session.sendRealtimeInput({
+            media: {
+                mimeType: 'image/jpeg',
+                data: cleanBase64
+            }
+        });
+    } catch (e) {
+        console.error("Video frame send failed", e);
+    }
   }
 
   public async disconnect() {
@@ -135,23 +265,19 @@ class LiveClient {
     if (this.inputSource) {
         this.inputSource.disconnect();
     }
-    if (this.processor) {
-        this.processor.disconnect();
+    if (this.workletNode) {
+        this.workletNode.disconnect();
     }
 
     this.inputAudioContext = null;
     this.outputAudioContext = null;
     this.inputSource = null;
-    this.processor = null;
+    this.workletNode = null;
   }
 
   private async handleMessage(message: LiveServerMessage) {
     const { serverContent } = message;
     if (!serverContent) return;
-
-    if (serverContent.turnComplete) {
-       // Turn complete logic if needed
-    }
 
     if (serverContent.interrupted) {
       this.sources.forEach(s => {
@@ -166,8 +292,22 @@ class LiveClient {
       this.playAudio(audioData);
     }
 
+    // Handle Grounding Metadata (Search Sources & Maps)
+    let webSources: WebSource[] | undefined;
+    const contentAny = serverContent as any;
+    
+    if (contentAny.groundingMetadata?.groundingChunks) {
+        webSources = contentAny.groundingMetadata.groundingChunks
+            .map((chunk: any) => chunk.web || chunk.maps) // Support both standard web and maps chunks
+            .filter((source: any) => source && source.uri && source.title)
+            .map((source: any) => ({
+                uri: source.uri,
+                title: source.title
+            }));
+    }
+
     if (serverContent.outputTranscription?.text && this.onTranscription) {
-        this.onTranscription(serverContent.outputTranscription.text, 'assistant', false);
+        this.onTranscription(serverContent.outputTranscription.text, 'assistant', false, webSources);
     }
     
     if (serverContent.inputTranscription?.text && this.onTranscription) {

@@ -1,6 +1,6 @@
 export enum AppMode {
-  GUARDIAN = 'GUARDIAN', // System 1: Fast, Reflexive
-  INSIGHT = 'INSIGHT',   // System 2: Slow, Cognitive
+  INSIGHT = 'INSIGHT',   // System 2: Default, Cognitive
+  NAVIGATION = 'NAVIGATION' // System 3: Wayfinding
 }
 
 export interface Hazard {
@@ -11,15 +11,28 @@ export interface Hazard {
   timestamp: number;
 }
 
+export interface WebSource {
+  uri: string;
+  title: string;
+  type?: 'VIDEO' | 'MAP' | 'PRODUCT' | 'GENERAL';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   timestamp: number;
+  webSources?: WebSource[];
 }
 
 export interface LiveState {
   isConnected: boolean;
   isConnecting: boolean;
   volume: number; // For visualization
+}
+
+export interface MediaItem {
+  uri: string;
+  title: string;
+  type: 'VIDEO' | 'AUDIO';
 }
